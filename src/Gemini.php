@@ -32,6 +32,7 @@ class Gemini extends Component
     public ?string $conversationId = null;
     public array $history = [];
     public array $defaultGenerationOptions = [];
+    // Conversation storage: uses Yii cache component exclusively
 
     private $_client = null;
 
@@ -156,13 +157,27 @@ class Gemini extends Component
 
     public function loadConversation(string $conversationId): ?array
     {
-        $cache = $this->getCacheInstance(); if ($cache === null) return null;
-        $key = $this->buildCacheKey($conversationId); $value = $cache->get($key); return is_array($value) ? $value : null;
+        // Use Yii cache component exclusively for conversation storage.
+        $cache = $this->getCacheInstance();
+        if ($cache === null) {
+            Yii::warning('No cache component available for Gemini conversation storage.', __METHOD__);
+            return null;
+        }
+
+        $key = $this->buildCacheKey($conversationId);
+        $value = $cache->get($key);
+        return is_array($value) ? $value : null;
     }
 
     public function saveConversation(string $conversationId, array $history): bool
     {
-        $cache = $this->getCacheInstance(); if ($cache === null) return false;
+        // Use Yii cache component exclusively for conversation storage.
+        $cache = $this->getCacheInstance();
+        if ($cache === null) {
+            Yii::warning('No cache component available for Gemini conversation storage. Cannot save conversation.', __METHOD__);
+            return false;
+        }
+
         return $cache->set($this->buildCacheKey($conversationId), $history, $this->cacheTtl);
     }
 
