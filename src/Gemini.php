@@ -434,8 +434,17 @@ class Gemini extends Component
      */
     public function chat(string $modelId, string $text, ?string $conversationId = null): array
     {
-        $convId = $conversationId ?? $this->conversationId; $localHistory = $this->history ?? [];
-        if ($convId !== null) { $loaded = $this->loadConversation($convId); if (is_array($loaded)) $localHistory = array_merge($loaded, $localHistory); }
+        $convId = $conversationId ?? $this->conversationId;
+        
+        // Load conversation history from cache if conversationId provided
+        // Start fresh each time to avoid cross-contamination between different conversation IDs
+        $localHistory = [];
+        if ($convId !== null) {
+            $loaded = $this->loadConversation($convId);
+            if (is_array($loaded)) {
+                $localHistory = $loaded;
+            }
+        }
 
         try { $gen = $this->generativeModel($modelId); $session = $gen->startChat(); } catch (\Throwable $e) {
             return ['success' => false, 'response' => null, 'history' => $localHistory, 'error' => 'Failed to initialize chat: ' . $e->getMessage()];
@@ -467,10 +476,19 @@ class Gemini extends Component
             else { $modelText = (string)$response; }
         } catch (\Throwable $e) { $modelText = null; }
 
-        $this->history = $localHistory;
-        if ($convId !== null && $modelText !== null) { $this->history = $this->appendToHistory($this->history, self::ROLE_USER, $text); $this->history = $this->appendToHistory($this->history, self::ROLE_MODEL, $modelText); $this->saveConversation($convId, $this->history); }
+        // Update local history and save back to cache (if conversationId provided)
+        if ($convId !== null && $modelText !== null) {
+            $localHistory = $this->appendToHistory($localHistory, self::ROLE_USER, $text);
+            $localHistory = $this->appendToHistory($localHistory, self::ROLE_MODEL, $modelText);
+            $this->saveConversation($convId, $localHistory);
+        }
+        
+        // Update instance history only if this was the default conversation or no conversationId
+        if ($convId === $this->conversationId || ($convId === null && $this->conversationId === null)) {
+            $this->history = $localHistory;
+        }
 
-        return ['success' => true, 'response' => $modelText ?? ($response instanceof \Stringable ? (string)$response : null), 'history' => $this->history, 'error' => null];
+        return ['success' => true, 'response' => $modelText ?? ($response instanceof \Stringable ? (string)$response : null), 'history' => $localHistory, 'error' => null];
     }
 
     /**
