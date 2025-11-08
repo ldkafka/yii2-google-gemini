@@ -13,7 +13,7 @@
     "require": {
         "php": ">=8.0",
         "yiisoft/yii2": "~2.0.14",
-        "google-gemini-php/client": "^2.6.0"
+        "yiisoft/yii2-httpclient": "~2.0.0"
     },
     "autoload": {
         "psr-4": {

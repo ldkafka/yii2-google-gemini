@@ -1,439 +1,494 @@
-# Yii2 Google Gemini Component
+# Yii2 Google Gemini Component (v2.0.0)
 
-A Yii2 component for integrating Google Gemini AI with conversation history management using Yii's cache system.
+Native, strongly-typed Yii2 component for the Google Gemini REST API. No external SDKs – only `yii\\httpclient`. Provides generation (text & multimodal), streaming, embeddings, Files API, token counting, and flexible caching strategies.
 
-## Features
+## What’s New in 2.0.0
 
-- 🚀 Easy integration with Google Gemini AI API
-- 💬 Conversation history management using Yii cache (Redis, File, Database, etc.)
-- 🎯 Support for multi-turn chat sessions with context awareness
-- ⚙️ Configurable generation parameters (temperature, topK, topP, maxOutputTokens)
-- 🔍 Built-in error handling and Yii logging integration
-- 🔌 Proxy access to all underlying Gemini client methods
-- 📦 Zero file/redis dependencies - uses only Yii cache components
+* Rebuilt on pure REST calls (no Gemini SDK)
+* Added multimodal inline data handling
+* Added SSE streaming helper
+* Full embeddings single + batch support
+* Files API wiring (simplified upload flow)
+* Model discovery (list + get)
+* Uniform response shape & error handling
+* Client & server caching patterns
+* Strict typing, `final` class, consistent helper methods
+
+## Feature Summary
+
+| Area | Capabilities |
+|------|--------------|
+| Generation | Text, multimodal (image/audio/video/document via inline or file references) |
+| Streaming | SSE incremental output with user callback |
+| Caching | `none`, `client` (Yii cache history), `server` (Gemini CachedContent) |
+| Embeddings | Single + batch embeddings for RAG / similarity |
+| Files | Upload, list, get, delete (simplified direct PUT) |
+| Models | Enumerate models, inspect limits/capabilities |
+| Tokens | Pre-flight token counting for cost estimation |
+| Helpers | `extractText`, `getFinishReason`, `getUsageMetadata` |
 
 ## Requirements
 
 - PHP >= 8.0
-- Yii2 >= 2.0.14
-- google-gemini-php/client >= 2.6.0
-- Yii cache component configured (e.g., Redis, FileCache, DbCache)
+- Yii2 >= 2.0.40
+- yiisoft/yii2-httpclient
 
 ## Installation
-
-### Method 1: Via Composer Command Line
 
 ```bash
 composer require ldkafka/yii2-google-gemini
 ```
 
-### Method 2: Add to Your Yii2 Project's composer.json
-
-Add the package to your `composer.json` file:
-
-```json
-{
-    "require": {
-        "ldkafka/yii2-google-gemini": "dev-main"
-    },
-    "repositories": [
-        {
-            "type": "vcs",
-            "url": "https://github.com/ldkafka/yii2-google-gemini.git"
-        }
-    ]
-}
-```
-
-Then run:
-
-```bash
-composer update ldkafka/yii2-google-gemini
-```
-
-**Note:** Once the package is published on Packagist, you can remove the `repositories` section and use a stable version number instead of `dev-main`.
-
-## Configuration
+## Quick Start
 
 ### Basic Configuration
 
-Add the component to your Yii2 application configuration (e.g., `common/config/main.php` or `console/config/main.php`):
-
 ```php
 'components' => [
     'gemini' => [
         'class' => 'ldkafka\gemini\Gemini',
-        'config' => [
-            'apiKey' => 'YOUR_GOOGLE_GEMINI_API_KEY',
-            'baseUrl' => 'https://generativelanguage.googleapis.com/v1/', // Recommended: use v1 API
-        ],
-        'cacheComponent' => 'cache', // Uses Yii::$app->cache by default
-        'cacheTtl' => 3600, // Cache conversation history for 1 hour
-    ],
-],
-```
-
-### Advanced Configuration
-
-```php
-'components' => [
-    'gemini' => [
-        'class' => 'ldkafka\gemini\Gemini',
-        'config' => [
-            'apiKey' => 'YOUR_GOOGLE_GEMINI_API_KEY',
-            'baseUrl' => 'https://generativelanguage.googleapis.com/v1/',
-            // Optional: Custom HTTP headers
-            'headers' => [
-                'X-Custom-Header' => 'value',
-            ],
-            // Optional: Custom query parameters
-            'query' => [
-                'param' => 'value',
-            ],
-        ],
-        'cacheComponent' => 'cache', // Or 'redis', 'fileCache', etc.
-        'cacheTtl' => 7200, // 2 hours
-        'cachePrefix' => 'my_app_gemini_', // Custom cache key prefix
-        'defaultGenerationOptions' => [
-            'temperature' => 0.7,      // Creativity level (0.0-2.0)
-            'topK' => 40,              // Token selection limit
-            'topP' => 0.95,            // Nucleus sampling threshold
-            'maxOutputTokens' => 2048, // Maximum response length
+        'apiKey' => 'YOUR_GEMINI_API_KEY',
+        'generationConfig' => [
+            'temperature' => 0.7,
+            'topP' => 0.95,
+            'maxOutputTokens' => 2048,
         ],
     ],
 ],
 ```
 
-### Configuration Options
-
-#### Required
-
-- **`config`** (array): Configuration for the Gemini client
-  - **`apiKey`** (string): Your Google Gemini API key
-  - **`baseUrl`** (string, optional): API endpoint URL. Default: v1beta. **Recommended:** `https://generativelanguage.googleapis.com/v1/` to avoid model compatibility issues.
-
-#### Optional
-
-- **`cacheComponent`** (string): Yii cache component ID. Default: `'cache'`
-- **`cacheTtl`** (int): Cache time-to-live in seconds. Default: `3600` (1 hour)
-- **`cachePrefix`** (string): Cache key prefix. Default: `'gemini_chat_'`
-- **`conversationId`** (string|null): Auto-load conversation history on init
-- **`defaultGenerationOptions`** (array): Default AI generation parameters
-  - `temperature` (float): Controls randomness (0.0 = deterministic, 2.0 = very creative)
-  - `topK` (int): Limits vocabulary selection to top K candidates
-  - `topP` (float): Nucleus sampling threshold (0.0-1.0)
-  - `maxOutputTokens` (int): Maximum response length in tokens
-  - `candidateCount` (int): Number of response variations to generate
-  - `stopSequences` (array): Strings that stop generation when encountered
-
-## Usage
-
-### Basic Chat
+### Simple Text Generation
 
 ```php
-// Single message without conversation history
 $gemini = Yii::$app->gemini;
-$response = $gemini->chat('gemini-2.0-flash-exp', 'What is PHP?');
+$resp = $gemini->generateContent('gemini-2.5-flash', 'Explain quantum computing');
 
-if ($response['success']) {
-    echo $response['response']; // "PHP is a popular server-side scripting language..."
-} else {
-    echo "Error: " . $response['error'];
+if ($resp['ok']) {
+    echo $gemini->extractText($resp['data']);
 }
 ```
 
-### Conversation with History
+## Usage Examples
+
+### 1. Basic Text Generation
 
 ```php
-$conversationId = 'user_' . Yii::$app->user->id . '_chat';
+$resp = $gemini->generateContent('gemini-2.5-flash', 'What is PHP?');
+
+if ($resp['ok']) {
+    $text = $gemini->extractText($resp['data']);
+    $usage = $gemini->getUsageMetadata($resp['data']);
+    echo "Response: $text\n";
+    echo "Tokens used: {$usage['totalTokenCount']}\n";
+}
+```
+
+### 2. Streaming Responses
+
+```php
+$gemini->streamGenerateContent('gemini-2.5-flash', 'Write a short story', function($chunk) {
+    if ($text = $chunk['candidates'][0]['content']['parts'][0]['text'] ?? null) {
+        echo $text;
+        flush();
+    }
+});
+```
+
+### 3. Multimodal (Text + Image)
+
+```php
+$content = [[
+    'parts' => [
+        ['text' => 'What is in this image?'],
+        ['inline_data' => [
+            'mime_type' => 'image/jpeg',
+            'data' => base64_encode(file_get_contents('/path/to/image.jpg'))
+        ]]
+    ],
+    'role' => 'user'
+]];
+
+$resp = $gemini->generateContent('gemini-2.5-flash', $content);
+```
+
+### 4. Client-side Conversation Caching
+
+```php
+$gemini->cacheType = 'client';
+$gemini->cacheTtl = 3600;
 
 // First message
-$response1 = $gemini->chat(
-    'gemini-2.0-flash-exp',
-    'My name is Alice and I live in Paris',
-    $conversationId
-);
+$resp = $gemini->chat('gemini-2.5-flash', 'My name is Alice', 'user123');
 
-// Follow-up message (maintains context from previous message)
-$response2 = $gemini->chat(
-    'gemini-2.0-flash-exp',
-    'What city do I live in?',
-    $conversationId
-);
-// Response: "You live in Paris."
-
-// Another follow-up
-$response3 = $gemini->chat(
-    'gemini-2.0-flash-exp',
-    'What is my name?',
-    $conversationId
-);
+// Follow-up (remembers context)
+$resp = $gemini->chat('gemini-2.5-flash', 'What is my name?', 'user123');
 // Response: "Your name is Alice."
 ```
 
-### Console Command Example
+### 5. Server-side Context Caching (Advanced)
 
 ```php
-// console/controllers/TestController.php
-public function actionGemini($message = null, $conversationId = null)
-{
-    if (!$message) {
-        echo "Usage: php yii test/gemini \"Your message\" [conversationId]\n";
-        return ExitCode::UNSPECIFIED_ERROR;
-    }
+$gemini->cacheType = 'server';
 
-    try {
-        $gemini = new \ldkafka\gemini\Gemini([
-            'config' => [
-                'apiKey' => Yii::$app->params['gemini_api_key'],
-                'baseUrl' => 'https://generativelanguage.googleapis.com/v1/',
-            ],
-            'cacheComponent' => 'cache',
-            'cacheTtl' => 3600,
-            'defaultGenerationOptions' => [
-                'temperature' => 0.7,
-                'topK' => 40,
-                'topP' => 0.95,
-                'maxOutputTokens' => 2048,
-            ],
-        ]);
-
-        $response = $gemini->chat('gemini-2.0-flash-exp', $message, $conversationId);
-
-        if ($response['success']) {
-            echo "Response: " . $response['response'] . "\n";
-            if ($conversationId) {
-                echo "Conversation ID: " . $conversationId . "\n";
-            }
-            return ExitCode::OK;
-        } else {
-            echo "Error: " . $response['error'] . "\n";
-            return ExitCode::UNSPECIFIED_ERROR;
-        }
-    } catch (\Exception $e) {
-        echo "Exception: " . $e->getMessage() . "\n";
-        return ExitCode::UNSPECIFIED_ERROR;
-    }
-}
-```
-
-Run it:
-```bash
-php yii test/gemini "Hello, how are you?" conv_123
-```
-
-### Managing Conversations
-
-```php
-$gemini = Yii::$app->gemini;
-$conversationId = 'user_session_123';
-
-// Load existing conversation history
-$history = $gemini->loadConversation($conversationId);
-if ($history) {
-    echo "Found " . count($history) . " messages in history\n";
-    foreach ($history as $message) {
-        echo $message['role'] . ": " . implode("\n", $message['parts']) . "\n";
-    }
-}
-
-// Manually save conversation
-$customHistory = [
-    ['role' => 'user', 'parts' => ['Hello']],
-    ['role' => 'model', 'parts' => ['Hi there!']],
-];
-$gemini->saveConversation($conversationId, $customHistory);
-
-// Clear conversation by saving empty array
-$gemini->saveConversation($conversationId, []);
-```
-
-### Direct Access to Gemini Client
-
-Access any method from the underlying [google-gemini-php/client](https://github.com/google-gemini/generative-ai-php):
-
-```php
-$gemini = Yii::$app->gemini;
-
-// Get the client directly
-$client = $gemini->getClient();
-
-// Or use magic method proxy
-$model = $gemini->generativeModel('gemini-2.0-flash-exp');
-$response = $model->generateContent('Write a haiku about PHP');
-echo $response->text();
-```
-
-### Custom Generation Config Per Request
-
-```php
-$response = $gemini->chat(
-    'gemini-2.0-flash-exp',
-    'Write a creative story about AI',
-    null, // No conversation history
+// Create cache with system instruction (requires 32k+ tokens)
+$cacheName = $gemini->createServerCache(
+    'gemini-2.5-flash',
+    'assistant-id',
+    'You are a helpful travel assistant. [... long system instruction ...]',
+    3600
 );
 
-// Note: Per-request config overrides are handled via buildGenerationConfig()
-// For now, set defaultGenerationOptions or use the client directly for advanced use cases
+// Use cached context
+$resp = $gemini->chatServer('gemini-2.5-flash', 'Best beaches in Sydney?', 'assistant-id');
 ```
 
-## Available Models
-
-Common Gemini models (as of 2025):
-
-- **`gemini-2.0-flash-exp`** - Latest Gemini 2.0 Flash (experimental, fastest, recommended)
-- **`gemini-1.5-pro`** - Gemini 1.5 Pro (balanced performance)
-- **`gemini-1.5-flash`** - Gemini 1.5 Flash (fast responses)
-
-**Important:** Use `baseUrl: 'https://generativelanguage.googleapis.com/v1/'` to ensure compatibility with newer models.
-
-## Error Handling
-
-The component includes built-in error handling and Yii logging:
+### 6. System Instructions
 
 ```php
-try {
-    $response = Yii::$app->gemini->chat('gemini-2.0-flash-exp', 'Your message');
+$gemini->systemInstruction = [
+    'parts' => [['text' => 'You are a helpful coding assistant who explains concepts simply.']]
+];
+
+$resp = $gemini->generateContent('gemini-2.5-flash', 'Explain recursion');
+```
+
+### 7. File Uploads
+
+```php
+// Upload a large video file
+$resp = $gemini->uploadFile('/path/to/video.mp4', 'My Video', 'video/mp4');
+$fileUri = $resp['data']['file']['uri'];
+
+// Use in generation
+$content = [[
+    'parts' => [
+        ['text' => 'Summarize this video'],
+        ['file_data' => [
+            'file_uri' => $fileUri,
+            'mime_type' => 'video/mp4'
+        ]]
+    ]
+]];
+$resp = $gemini->generateContent('gemini-2.5-flash', $content);
+
+// List uploaded files
+$files = $gemini->listFiles();
+
+// Delete file
+$gemini->deleteFile('files/abc123');
+```
+
+### 8. Embeddings
+
+```php
+// Single embedding
+$resp = $gemini->embedContent(
+    'text-embedding-004',
+    'Hello world',
+    'RETRIEVAL_QUERY'
+);
+$embedding = $resp['data']['embedding']['values'];
+
+// Batch embeddings
+$requests = [
+    [
+        'content' => ['parts' => [['text' => 'Document 1']]],
+        'taskType' => 'RETRIEVAL_DOCUMENT'
+    ],
+    [
+        'content' => ['parts' => [['text' => 'Document 2']]],
+        'taskType' => 'RETRIEVAL_DOCUMENT'
+    ],
+];
+$resp = $gemini->batchEmbedContents('text-embedding-004', $requests);
+```
+
+### 9. Token Counting
+
+```php
+$tokens = $gemini->countTokens('gemini-2.5-flash', 'Your prompt text here');
+echo "This prompt will use approximately $tokens tokens\n";
+```
+
+### 10. Model Discovery
+
+```php
+// List all available models
+$models = $gemini->listModels();
+foreach ($models['data']['models'] as $model) {
+    echo "{$model['name']}: {$model['displayName']}\n";
+}
+
+// Get specific model details
+$model = $gemini->getModel('gemini-2.5-flash');
+echo "Context window: {$model['data']['inputTokenLimit']} tokens\n";
+```
+
+## Caching Modes Deep Dive
+
+| Mode | Purpose | Storage | Pros | Cons |
+|------|---------|---------|------|------|
+| `none` | Stateless requests | None | Simplicity | No memory of prior turns |
+| `client` | Short/medium chats | Yii cache (`gem_chat_<id>`) | Fast, light, adjustable TTL | History grows; prune for very long sessions |
+| `server` | Large domain context | Gemini CachedContent | Huge reusable context on provider side | Requires ~32K+ tokens; creation often fails if too small |
+
+Server cache creation requires a very large system instruction document. Use `countTokens()` before attempting `createServerCache()`.
+
+## Console Commands
+
+Example test commands in `console/controllers/TestController.php`:
+
+```bash
+# Stateless generation
+php yii test/gemini-none "What is the capital of France?"
+
+# Client-side caching (conversation)
+php yii test/gemini-client
+
+# Server-side caching
+php yii test/gemini-server "Tell me about Sydney beaches"
+
+# Clear cache
+php yii test/gemini-client test-chat 1
+```
+
+## Configuration Options
+
+### Component Properties
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `apiKey` | string | *required* | Your Gemini API key ([Get one](https://aistudio.google.com/apikey)) |
+| `baseUrl` | string | `https://generativelanguage.googleapis.com/v1/` | API base URL |
+| `generationConfig` | array | `[]` | Default generation parameters |
+| `safetySettings` | array | `[]` | Content safety filters |
+| `systemInstruction` | array\|null | `null` | Default system instruction |
+| `cacheType` | string | `'none'` | Cache mode: `'none'`, `'client'`, `'server'` |
+| `cacheTtl` | int | `3600` | Cache TTL in seconds |
+| `cacheComponent` | string\|null | `'cache'` | Yii cache component name |
+| `httpConfig` | array | `[]` | Custom HTTP client configuration |
+
+### Generation Config Options
+
+```php
+'generationConfig' => [
+    'temperature' => 0.7,          // 0.0-2.0, creativity level
+    'topP' => 0.95,                // 0.0-1.0, nucleus sampling
+    'topK' => 40,                  // Token selection limit
+    'maxOutputTokens' => 2048,     // Max response length
+    'stopSequences' => ['END'],    // Stop generation triggers
+    'candidateCount' => 1,         // Number of responses
+]
+```
+
+## Supported Models (Snapshot)
+
+| Model | Description | Context Window |
+|-------|-------------|----------------|
+| `gemini-2.5-pro` | Most powerful thinking model | 2M tokens |
+| `gemini-2.5-flash` | Balanced, fast, 1M context | 1M tokens |
+| `gemini-2.5-flash-lite` | Fastest, cost-efficient | 1M tokens |
+| `text-embedding-004` | Text embeddings for RAG | N/A |
+
+See [Gemini Models Documentation](https://ai.google.dev/gemini-api/docs/models) for full list.
+
+## Canonical Response Format
+
+All methods return:
+
+```php
+[
+    'ok' => true|false,      // Success status
+    'status' => 200,         // HTTP status code
+    'data' => [...],         // Response data
+    'error' => null|string   // Error message if failed
+]
+```
+
+### Helper Methods
+
+```php
+// Extract text from response
+$text = $gemini->extractText($resp['data']);
+
+// Get finish reason ('STOP', 'MAX_TOKENS', 'SAFETY', etc.)
+$reason = $gemini->getFinishReason($resp['data']);
+
+// Get usage metadata
+$usage = $gemini->getUsageMetadata($resp['data']);
+// ['promptTokenCount' => 10, 'candidatesTokenCount' => 50, 'totalTokenCount' => 60]
+```
+
+## Helper Methods
+
+```php
+$text   = $gemini->extractText($resp['data']);
+$reason = $gemini->getFinishReason($resp['data']);
+$usage  = $gemini->getUsageMetadata($resp['data']);
+```
+
+## Cache Modes (Summary)
+
+### None (Stateless)
+
+```php
+$gemini->cacheType = 'none';
+$resp = $gemini->generateContent('gemini-2.5-flash', 'Hello');
+// Each request is independent
+```
+
+### Client (Local Conversation History)
+
+```php
+$gemini->cacheType = 'client';
+$resp = $gemini->chat('gemini-2.5-flash', 'My name is Bob', 'user123');
+$resp = $gemini->chat('gemini-2.5-flash', 'What is my name?', 'user123');
+// Conversation stored in Yii cache component
+```
+
+### Server (Gemini Context Caching)
+
+```php
+$gemini->cacheType = 'server';
+$cacheName = $gemini->createServerCache(
+    'gemini-2.5-flash',
+    'id',
+    '[Large system instruction 32k+ tokens]',
+    3600
+);
+$resp = $gemini->chatServer('gemini-2.5-flash', 'Question', 'id');
+// System instruction cached on Google's servers
+```
+
+**Note:** Server caching requires minimum 32,000 tokens in cached content.
+
+## Error Handling Pattern
+
+```php
+$resp = $gemini->generateContent('gemini-2.5-flash', 'Hello');
+
+if (!$resp['ok']) {
+    Yii::error("Gemini API error: {$resp['error']} (HTTP {$resp['status']})");
     
-    if ($response['success']) {
-        echo $response['response'];
-    } else {
-        // Handle graceful errors (e.g., API rate limits, invalid input)
-        Yii::error('Gemini chat error: ' . $response['error']);
-        echo "Sorry, I couldn't process your request: " . $response['error'];
-    }
-} catch (\RuntimeException $e) {
-    // Handle critical errors (e.g., missing API key, network issues)
-    Yii::error('Gemini exception: ' . $e->getMessage());
-    echo "An unexpected error occurred. Please try again later.";
+    // Common error codes:
+    // 400 - Bad request (invalid parameters)
+    // 401 - Invalid API key
+    // 429 - Rate limit exceeded
+    // 500 - Server error
 }
 ```
 
-Errors are automatically logged to your Yii2 application logs with appropriate severity levels.
+## Advanced Usage
 
-## Cache Component Setup
-
-The component requires a configured Yii cache component. Examples:
-
-### Redis Cache (Recommended)
+### Custom HTTP Configuration
 
 ```php
-'components' => [
-    'cache' => [
-        'class' => 'yii\redis\Cache',
-        'redis' => [
-            'hostname' => 'localhost',
-            'port' => 6379,
-            'database' => 0,
-        ],
+'gemini' => [
+    'class' => 'ldkafka\gemini\Gemini',
+    'apiKey' => 'YOUR_KEY',
+    'httpConfig' => [
+        'timeout' => 60,
+        'transport' => 'yii\httpclient\CurlTransport',
     ],
 ],
 ```
 
-### File Cache
+### Multimodal with Multiple Images
 
 ```php
-'components' => [
-    'cache' => [
-        'class' => 'yii\caching\FileCache',
-        'cachePath' => '@runtime/cache',
-    ],
-],
+$content = [[
+    'parts' => [
+        ['text' => 'Compare these images'],
+        ['inline_data' => ['mime_type' => 'image/jpeg', 'data' => base64_encode($image1)]],
+        ['inline_data' => ['mime_type' => 'image/jpeg', 'data' => base64_encode($image2)]],
+    ]
+]];
 ```
 
-### Database Cache
+### Custom Safety Settings
 
 ```php
-'components' => [
-    'cache' => [
-        'class' => 'yii\caching\DbCache',
-        'cacheTable' => 'cache',
-    ],
-],
+$gemini->safetySettings = [
+    ['category' => 'HARM_CATEGORY_HARASSMENT', 'threshold' => 'BLOCK_MEDIUM_AND_ABOVE'],
+    ['category' => 'HARM_CATEGORY_HATE_SPEECH', 'threshold' => 'BLOCK_ONLY_HIGH'],
+];
 ```
 
-## Response Format
+### Safety Settings Explained
 
-The `chat()` method returns an array with the following structure:
+`safetySettings` lets you tell Gemini which kinds of harmful content to filter and at what strictness. The value is an array of objects with a `category` and a `threshold`.
 
-```php
+- Common categories: `HARM_CATEGORY_HARASSMENT`, `HARM_CATEGORY_HATE_SPEECH`, `HARM_CATEGORY_SEXUALLY_EXPLICIT`, `HARM_CATEGORY_DANGEROUS_CONTENT`, `HARM_CATEGORY_VIOLENCE`.
+- Typical thresholds (in order of strictness): `BLOCK_NONE`, `BLOCK_LOW_AND_ABOVE`, `BLOCK_MEDIUM_AND_ABOVE`, `BLOCK_ONLY_HIGH`.
+
+Example JSON payload as sent to the API:
+
+```json
 [
-    'success' => true|false,        // Whether the request succeeded
-    'response' => 'Model response'|null,  // The AI's text response
-    'history' => [                  // Updated conversation history
-        ['role' => 'user', 'parts' => ['message']],
-        ['role' => 'model', 'parts' => ['response']],
-        // ...
-    ],
-    'error' => 'Error message'|null // Error description if failed
+    { "category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_MEDIUM_AND_ABOVE" },
+    { "category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_ONLY_HIGH" }
 ]
 ```
 
-## Conversation History Format
+Notes:
+- If `safetySettings` is empty, no custom filters are applied (provider defaults may still apply).
+- You can mix categories with different thresholds.
+- Overly strict settings can block benign answers; adjust to your domain’s tolerance.
 
-Conversation history is stored as an array of message objects:
+## Testing
 
-```php
-[
-    [
-        'role' => 'user',           // or 'model'
-        'parts' => ['Message text'] // Array of message parts
-    ],
-    [
-        'role' => 'model',
-        'parts' => ['Response text']
-    ],
-    // ...
-]
-```
+The package includes comprehensive test actions:
+
+1. **actionGeminiNone** - Test stateless generation
+2. **actionGeminiClient** - Test client-side conversation caching
+3. **actionGeminiServer** - Test server-side context caching
 
 ## Troubleshooting
 
-### "models/gemini-1.5-flash is not found for API version v1beta"
+### "API key not configured"
 
-**Solution:** Set `baseUrl` to use the v1 API instead of v1beta:
+Ensure your API key is set in the component configuration or params.
 
-```php
-'config' => [
-    'apiKey' => 'YOUR_API_KEY',
-    'baseUrl' => 'https://generativelanguage.googleapis.com/v1/',
-],
-```
+### "Failed to create server cache"
 
-### "No cache component available for Gemini conversation storage"
+Server caching requires:
+- Minimum 32,000 tokens in the cached content
+- Supported model (gemini-2.5-flash, gemini-2.5-pro)
+- System instruction or large document
 
-**Solution:** Ensure you have a cache component configured in your Yii application:
+Use client-side caching for shorter conversations.
 
-```php
-'components' => [
-    'cache' => [
-        'class' => 'yii\caching\FileCache',
-    ],
-],
-```
+### Streaming not working
 
-### Cache not persisting between requests
+Ensure your HTTP client supports Server-Sent Events (SSE). The default Yii2 HTTP client may need custom transport configuration.
 
-**Solution:** Check your cache component configuration and TTL settings. FileCache may require write permissions to the cache directory.
+## Production Notes
+
+* Implement backoff + retry for `429` & transient `5xx` responses.
+* Prune client cache histories when token counts get large (outside of scope for this base component).
+* For server caching: build and store a domain knowledge base (e.g., large markdown/text corpus) and verify token count with `countTokens()`.
+* Log latency and token usage: `Yii::info([...], 'gemini')` for observability.
+
+## Links
+
+- [Gemini API Documentation](https://ai.google.dev/gemini-api/docs)
+- [Get API Key](https://aistudio.google.com/apikey)
+- [API Reference](https://ai.google.dev/api)
+- [Model Pricing](https://ai.google.dev/gemini-api/docs/pricing)
 
 ## License
 
-BSD-3-Clause License. See [LICENSE](LICENSE) file for details.
+BSD-3-Clause (matches class header).
 
-## Contributing
+## Support / Contributing
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+Open issues or PRs at: https://github.com/ldkafka/yii2-google-gemini
 
-## Support
+When reporting an issue, include:
+1. PHP / Yii versions
+2. Failing method and sample call
+3. Full response array (mask secrets)
+4. Expected vs actual behavior
 
-For issues, questions, or contributions, please visit the [GitHub repository](https://github.com/ldkafka/yii2-google-gemini).
-
-## Changelog
-
-### 1.0.0 (2025-11-06)
-
-- Initial release
-- Yii cache-based conversation storage
-- Support for Google Gemini 2.0 models
-- Comprehensive error handling and logging
-- Full PHPDoc documentation
+---
+Enjoy building with Gemini! Suggestions & improvements welcome.
