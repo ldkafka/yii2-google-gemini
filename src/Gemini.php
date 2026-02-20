@@ -2,10 +2,10 @@
 declare(strict_types=1);
 /**
  * Yii2 Google Gemini Component
- * 
+ *
  * A comprehensive Yii2 component for Google's Gemini API using native Yii2 HTTP Client.
  * Supports text generation, multimodal inputs, streaming, embeddings, file uploads, and context caching.
- * 
+ *
  * @package ldkafka\gemini
  * @version 2.0.0
  * @author Lucian Kafka
@@ -15,14 +15,15 @@ declare(strict_types=1);
 
 namespace ldkafka\gemini;
 
+
 use Yii;
 use yii\base\Component;
 use yii\base\InvalidConfigException;
-use yii\httpclient\Client as HttpClient;
+use GuzzleHttp\Client as GuzzleClient;
 
 /**
  * Gemini Component
- * 
+ *
  * Provides a complete interface to Google's Gemini API with support for:
  * - Text and multimodal content generation
  * - Streaming responses via Server-Sent Events
@@ -30,74 +31,75 @@ use yii\httpclient\Client as HttpClient;
  * - File uploads for large media
  * - Text embeddings for RAG workflows
  * - Model discovery and capabilities
- * 
- * @property-read HttpClient $http The HTTP client instance
+ *
+ * @property-read GuzzleClient $http The HTTP client instance
  */
 final class Gemini extends Component
 {
 	/** @var string Component version */
 	public const VERSION = '2.0.0';
-	
+
 	/** @var string Default Gemini API base URL */
 	public const DEFAULT_BASE_URL = 'https://generativelanguage.googleapis.com/v1/';
+
 
 	/**
 	 * @var string Google Gemini API key (required)
 	 * Get your key at https://aistudio.google.com/apikey
 	 */
 	public string $apiKey = '';
-	
+
 	/**
 	 * @var string API base URL
 	 */
 	public string $baseUrl = self::DEFAULT_BASE_URL;
-	
+
 	/**
 	 * @var array Default generation configuration
 	 * Options: temperature, topP, topK, maxOutputTokens, stopSequences, candidateCount
 	 */
 	public array $generationConfig = [];
-	
+
 	/**
 	 * @var array Content safety settings
 	 * Array of safety settings for different harm categories
 	 */
 	public array $safetySettings = [];
-	
+
 	/**
 	 * @var array|null System instruction for all requests
 	 * Format: ['parts' => [['text' => 'Your instruction']]]
 	 */
 	public ?array $systemInstruction = null;
-	
+
 	/**
 	 * @var string Cache type: 'none' (stateless), 'client' (local history), 'server' (Gemini context cache)
 	 */
 	public string $cacheType = 'none';
-	
+
 	/**
 	 * @var int Cache time-to-live in seconds
 	 */
 	public int $cacheTtl = 3600;
-	
+
 	/**
 	 * @var string|null Yii cache component name (e.g., 'cache', 'redis')
 	 */
 	public ?string $cacheComponent = 'cache';
-	
+
 	/**
 	 * @var array Custom HTTP client configuration
 	 */
 	public array $httpConfig = [];
-	
+
 	/**
-	 * @var HttpClient|null HTTP client instance (lazy-loaded)
+	 * @var GuzzleClient|null  GuzzleClient instance (lazy-loaded)
 	 */
-	private ?HttpClient $_httpClient = null;
+	private ?GuzzleClient $_httpClient = null;
 
 	/**
 	 * Constructor
-	 * 
+	 *
 	 * @param array $config Component configuration
 	 * @throws InvalidConfigException if apiKey is missing or cacheType is invalid
 	 */
@@ -114,47 +116,44 @@ final class Gemini extends Component
 
 	/**
 	 * Get or initialize the HTTP client
-	 * 
-	 * @return HttpClient Configured HTTP client instance
+	 *
+	 * @return GuzzleClient Configured HTTP client instance
 	 */
-	protected function http(): HttpClient
+	protected function http(): GuzzleClient
 	{
 		if ($this->_httpClient === null) {
-			$defaultCfg = [
-				'baseUrl' => $this->baseUrl,
-				'requestConfig' => ['format' => HttpClient::FORMAT_JSON],
-				'responseConfig' => ['format' => HttpClient::FORMAT_JSON],
-			];
-			$this->_httpClient = new HttpClient(array_merge($defaultCfg, $this->httpConfig));
+			$this->_httpClient = new GuzzleClient(array_merge([
+				'base_uri' => $this->baseUrl,
+				'timeout'  => 60.0,
+			], $this->httpConfig));
 		}
 		return $this->_httpClient;
 	}
 
 	/**
 	 * Make an HTTP request to the Gemini API
-	 * 
+	 *
 	 * @param string $method HTTP method (GET, POST, PUT, DELETE)
 	 * @param string $endpoint API endpoint path
 	 * @param array $data Request body data
 	 * @return array Response with keys: ok, status, data, error
 	 */
-    protected function req(string $method, string $endpoint, array $data = []): array
+	protected function req(string $method, string $endpoint, array $data = []): array
 	{
 		try {
-			$r = $this->http()->createRequest()
-				->setMethod($method)
-				->setUrl($endpoint)
-				->addHeaders(['x-goog-api-key' => $this->apiKey]);
-			if ($data) {
-				$r->setData($data);
-			}
-			$res = $r->send();
-			$dataOut = is_array($res->data) ? $res->data : (array)$res->data;
+			$response = $this->http()->request($method, $endpoint, [
+				'query' => ['key' => $this->apiKey],
+				'json' => $data ?: null,
+				'http_errors' => false,
+			]);
+
+			$body = json_decode((string)$response->getBody(), true);
+
 			return [
-				'ok' => $res->isOk,
-				'status' => $res->statusCode,
-				'data' => $dataOut,
-				'error' => $res->isOk ? null : ($dataOut['error']['message'] ?? 'error'),
+				'ok' => $response->getStatusCode() < 300,
+				'status' => $response->getStatusCode(),
+				'data' => $body,
+				'error' => ($response->getStatusCode() >= 400) ? ($body['error']['message'] ?? 'API Error') : null,
 			];
 		} catch (\Throwable $e) {
 			return ['ok' => false, 'status' => 0, 'data' => null, 'error' => $e->getMessage()];
@@ -163,19 +162,19 @@ final class Gemini extends Component
 
 	/**
 	 * Generate content using the Gemini model
-	 * 
+	 *
 	 * Supports text-only prompts, multimodal content (text + images/video/audio),
 	 * and conversation history.
-	 * 
+	 *
 	 * @param string $model Model name (e.g., 'gemini-2.5-flash')
 	 * @param string|array $content Text string or array of content parts
 	 * @param array $options Additional generation config to merge with defaults
 	 * @return array Response with keys: ok, status, data, error
-	 * 
+	 *
 	 * @example
 	 * // Simple text
 	 * $resp = $gemini->generateContent('gemini-2.5-flash', 'Hello');
-	 * 
+	 *
 	 * // Multimodal (text + image)
 	 * $content = [[
 	 *     'parts' => [
@@ -203,7 +202,7 @@ final class Gemini extends Component
 
 	/**
 	 * Build contents array from various input formats
-	 * 
+	 *
 	 * @param string|array $content Input content (string, single part object, or array of parts)
 	 * @return array Normalized contents array for API
 	 */
@@ -227,15 +226,15 @@ final class Gemini extends Component
 
 	/**
 	 * Stream generated content with Server-Sent Events
-	 * 
+	 *
 	 * Calls the callback function for each chunk of the response as it's generated.
-	 * 
+	 *
 	 * @param string $model Model name
 	 * @param string|array $content Text string or content array
 	 * @param callable $callback Function to call with each chunk: function(array $chunk): void
 	 * @param array $options Additional generation config
 	 * @return array Response with keys: ok, status, error
-	 * 
+	 *
 	 * @example
 	 * $gemini->streamGenerateContent('gemini-2.5-flash', 'Write a story', function($chunk) {
 	 *     if ($text = $chunk['candidates'][0]['content']['parts'][0]['text'] ?? null) {
@@ -244,9 +243,17 @@ final class Gemini extends Component
 	 *     }
 	 * });
 	 */
-	public function streamGenerateContent(string $model, string|array $content, callable $callback, array $options = []): array
-	{
+	/**
+	 * Stream generated content with Server-Sent Events (Gemini v1 Correct Implementation)
+	 */
+	public function streamGenerateContent(
+		string $model,
+		string|array $content,
+		callable $callback,
+		array $options = []
+	): array {
 		$body = ['contents' => $this->buildContents($content)];
+
 		$cfg = array_merge($this->generationConfig, $options);
 		if ($cfg) {
 			$body['generationConfig'] = $cfg;
@@ -257,39 +264,79 @@ final class Gemini extends Component
 		if ($this->systemInstruction) {
 			$body['systemInstruction'] = $this->systemInstruction;
 		}
-		
+
 		try {
-			$r = $this->http()->createRequest()
-				->setMethod('POST')
-				->setUrl('models/' . $model . ':streamGenerateContent?alt=sse')
-				->addHeaders(['x-goog-api-key' => $this->apiKey])
-				->setData($body);
-			
+			$endpoint = "models/{$model}:streamGenerateContent";
+
+			$response = $this->http()->request('POST', $endpoint, [
+				'query' => [
+					'key' => $this->apiKey,
+					'alt' => 'sse',
+				],
+				'json' => $body,
+				'stream' => true,
+				'headers' => [
+					'Accept' => 'text/event-stream',
+					'Cache-Control' => 'no-cache',
+				],
+				'http_errors' => false,
+			]);
+
+			if ($response->getStatusCode() >= 400) {
+				return [
+					'ok' => false,
+					'status' => $response->getStatusCode(),
+					'error' => (string)$response->getBody(),
+				];
+			}
+
+			$stream = $response->getBody();
 			$buffer = '';
-			$r->on(\yii\httpclient\Request::EVENT_AFTER_SEND, function($event) use ($callback, &$buffer) {
-				$lines = explode("\n", $event->response->content);
+
+			while (!$stream->eof()) {
+				$buffer .= $stream->read(1024);
+
+				$lines = explode("\n", $buffer);
+				$buffer = array_pop($lines);
+
 				foreach ($lines as $line) {
+					$line = trim($line);
+
 					if (strpos($line, 'data: ') === 0) {
 						$json = substr($line, 6);
-						if ($data = json_decode($json, true)) {
-							$callback($data);
+
+						if ($json && $json !== '[DONE]') {
+							$data = json_decode($json, true);
+							if (is_array($data)) {
+								$callback($data);
+							}
 						}
 					}
 				}
-			});
-			
-			$res = $r->send();
-			return ['ok' => $res->isOk, 'status' => $res->statusCode];
+			}
+
+			return [
+				'ok' => true,
+				'status' => 200,
+				'error' => null,
+			];
 		} catch (\Throwable $e) {
-			return ['ok' => false, 'status' => 0, 'error' => $e->getMessage()];
+			Yii::error("Gemini Stream Exception: " . $e->getMessage());
+
+			return [
+				'ok' => false,
+				'status' => 0,
+				'error' => $e->getMessage(),
+			];
 		}
 	}
 
+
 	/**
 	 * Count tokens in the given text
-	 * 
+	 *
 	 * Useful for estimating API costs before making generation requests.
-	 * 
+	 *
 	 * @param string $model Model name
 	 * @param string $text Text to count tokens for
 	 * @return int|null Token count, or null on error
@@ -304,16 +351,16 @@ final class Gemini extends Component
 
 	/**
 	 * Chat with conversation history (client-side caching)
-	 * 
+	 *
 	 * When cacheType is 'client', maintains conversation history in Yii cache.
 	 * When cacheType is 'none', behaves like generateContent (stateless).
-	 * 
+	 *
 	 * @param string $model Model name
 	 * @param string $text User message
 	 * @param string|null $id Conversation ID for history storage
 	 * @param array $options Additional generation config
 	 * @return array Response with keys: ok, status, data, error
-	 * 
+	 *
 	 * @example
 	 * $gemini->cacheType = 'client';
 	 * $resp = $gemini->chat('gemini-2.5-flash', 'My name is Alice', 'user123');
@@ -326,7 +373,7 @@ final class Gemini extends Component
 		if ($this->cacheType === 'none') {
 			return $this->generateContent($model, $text, $options);
 		}
-		
+
 		// Load conversation history from cache
 		$history = [];
 		$cache = null;
@@ -338,7 +385,7 @@ final class Gemini extends Component
 				$cache = null;
 			}
 		}
-		
+
 		if ($id && $this->cacheType === 'client' && $cache) {
 			try {
 				$history = $cache->get('gem_chat_' . $id) ?: [];
@@ -347,23 +394,23 @@ final class Gemini extends Component
 				$history = [];
 			}
 		}
-		
+
 		// Add user message to history
 		$history[] = ['role' => 'user', 'parts' => [['text' => $text]]];
-		
+
 		// Build request with full history
 		$body = ['contents' => $history];
 		$cfg = array_merge($this->generationConfig, $options);
 		if ($cfg) {
 			$body['generationConfig'] = $cfg;
 		}
-		if ($this->safetySettings) { 
+		if ($this->safetySettings) {
 			$body['safetySettings'] = $this->safetySettings;
 		}
-		
+
 		// Make request
 		$resp = $this->req('POST', 'models/' . $model . ':generateContent', $body);
-		
+
 		// Save updated history with model response
 		if ($resp['ok'] && $id && $this->cacheType === 'client' && $cache) {
 			$reply = $resp['data']['candidates'][0]['content']['parts'][0]['text'] ?? null;
@@ -376,22 +423,22 @@ final class Gemini extends Component
 				}
 			}
 		}
-		
+
 		return $resp;
 	}
 
 	/**
 	 * Create a server-side cached content
-	 * 
+	 *
 	 * Creates a CachedContent resource on Gemini's servers with a system instruction.
 	 * Requires minimum 32,000 tokens in the cached content.
-	 * 
+	 *
 	 * @param string $model Model name
 	 * @param string $id Local cache ID for storing the cachedContent name
 	 * @param string $system System instruction text (must be 32k+ tokens)
 	 * @param int|null $ttl Cache TTL in seconds (defaults to $this->cacheTtl)
 	 * @return string|null CachedContent name (e.g., 'cachedContents/abc123'), or null on error
-	 * 
+	 *
 	 * @example
 	 * $cacheName = $gemini->createServerCache(
 	 *     'gemini-2.5-flash',
@@ -413,7 +460,7 @@ final class Gemini extends Component
 			return null;
 		}
 		$name = $resp['data']['name'] ?? null;
-		
+
 		// Store the cache name locally for reuse
 		if ($name && $this->cacheComponent) {
 			try {
@@ -430,16 +477,16 @@ final class Gemini extends Component
 
 	/**
 	 * Chat using server-side cached content
-	 * 
+	 *
 	 * Uses a previously created CachedContent resource for the system instruction.
 	 * Creates a new cache if one doesn't exist for the given ID.
-	 * 
+	 *
 	 * @param string $model Model name
 	 * @param string $text User message
 	 * @param string $id Cache ID (used to lookup cachedContent name)
 	 * @param array $options Additional generation config
 	 * @return array Response with keys: ok, status, data, error
-	 * 
+	 *
 	 * @example
 	 * $gemini->cacheType = 'server';
 	 * $resp = $gemini->chatServer('gemini-2.5-flash', 'Best beaches in Sydney?', 'travel-assistant');
@@ -449,7 +496,7 @@ final class Gemini extends Component
 		// Try to get cached content name from local cache
 		$cache = null;
 		$cacheName = null;
-		
+
 		if ($this->cacheComponent) {
 			try {
 				$cache = Yii::$app->get($this->cacheComponent);
@@ -462,7 +509,7 @@ final class Gemini extends Component
 				$cacheName = null;
 			}
 		}
-		
+
 		// Create cache if it doesn't exist
 		if (!$cacheName) {
 			$cacheName = $this->createServerCache($model, $id, 'You are a helpful AI assistant.');
@@ -470,7 +517,7 @@ final class Gemini extends Component
 		if (!$cacheName) {
 			return ['ok' => false, 'status' => 0, 'data' => null, 'error' => 'Failed to create or retrieve cache'];
 		}
-		
+
 		// Build request with cachedContent reference
 		$body = [
 			'contents' => [['parts' => [['text' => $text]], 'role' => 'user']],
@@ -485,10 +532,10 @@ final class Gemini extends Component
 		}
 		return $this->req('POST', 'models/' . $model . ':generateContent', $body);
 	}
-	
+
 	/**
 	 * List all available Gemini models
-	 * 
+	 *
 	 * @return array Response with list of models and their capabilities
 	 */
 	public function listModels(): array
@@ -498,7 +545,7 @@ final class Gemini extends Component
 
 	/**
 	 * Get details about a specific model
-	 * 
+	 *
 	 * @param string $model Model name (e.g., 'gemini-2.5-flash')
 	 * @return array Response with model details (displayName, inputTokenLimit, etc.)
 	 */
@@ -509,14 +556,14 @@ final class Gemini extends Component
 
 	/**
 	 * Upload a file to the Gemini Files API
-	 * 
+	 *
 	 * For large media files (videos, documents) that exceed inline size limits.
-	 * 
+	 *
 	 * @param string $filePath Local file path
 	 * @param string|null $displayName Display name (defaults to filename)
 	 * @param string|null $mimeType MIME type (auto-detected if null)
 	 * @return array Response with file URI
-	 * 
+	 *
 	 * @example
 	 * $resp = $gemini->uploadFile('/path/to/video.mp4', 'My Video', 'video/mp4');
 	 * $fileUri = $resp['data']['file']['uri'];
@@ -526,14 +573,14 @@ final class Gemini extends Component
 		$mimeType = $mimeType ?? mime_content_type($filePath);
 		$displayName = $displayName ?? basename($filePath);
 		$fileData = base64_encode(file_get_contents($filePath));
-		
+
 		$body = [
 			'file' => [
 				'displayName' => $displayName,
 				'mimeType' => $mimeType,
 			],
 		];
-		
+
 		$resp = $this->req('POST', 'files', $body);
 		if (!$resp['ok']) {
 			return $resp;
@@ -551,7 +598,7 @@ final class Gemini extends Component
 
 	/**
 	 * Get metadata for an uploaded file
-	 * 
+	 *
 	 * @param string $fileName File name (e.g., 'files/abc123')
 	 * @return array Response with file metadata
 	 */
@@ -562,7 +609,7 @@ final class Gemini extends Component
 
 	/**
 	 * List all uploaded files
-	 * 
+	 *
 	 * @return array Response with array of file metadata
 	 */
 	public function listFiles(): array
@@ -572,7 +619,7 @@ final class Gemini extends Component
 
 	/**
 	 * Delete an uploaded file
-	 * 
+	 *
 	 * @param string $fileName File name (e.g., 'files/abc123')
 	 * @return array Response indicating success or failure
 	 */
@@ -583,14 +630,14 @@ final class Gemini extends Component
 
 	/**
 	 * Generate an embedding vector for the given content
-	 * 
+	 *
 	 * Used for semantic search, RAG (Retrieval-Augmented Generation), and similarity comparisons.
-	 * 
+	 *
 	 * @param string $model Embedding model name (e.g., 'text-embedding-004')
 	 * @param string|array $content Text or content object
 	 * @param string|null $taskType Task type: 'RETRIEVAL_QUERY', 'RETRIEVAL_DOCUMENT', 'SEMANTIC_SIMILARITY', etc.
 	 * @return array Response with embedding values
-	 * 
+	 *
 	 * @example
 	 * $resp = $gemini->embedContent('text-embedding-004', 'Hello world', 'RETRIEVAL_QUERY');
 	 * $embedding = $resp['data']['embedding']['values']; // Array of floats
@@ -606,13 +653,13 @@ final class Gemini extends Component
 
 	/**
 	 * Generate embeddings for multiple contents in a single request
-	 * 
+	 *
 	 * More efficient than calling embedContent multiple times.
-	 * 
+	 *
 	 * @param string $model Embedding model name
 	 * @param array $requests Array of request objects with 'content' and optional 'taskType'
 	 * @return array Response with array of embeddings
-	 * 
+	 *
 	 * @example
 	 * $requests = [
 	 *     ['content' => ['parts' => [['text' => 'Doc 1']]], 'taskType' => 'RETRIEVAL_DOCUMENT'],
@@ -628,7 +675,7 @@ final class Gemini extends Component
 
 	/**
 	 * Helper: Extract text from a generation response
-	 * 
+	 *
 	 * @param array $data Response data from generateContent
 	 * @return string|null The generated text, or null if not found
 	 */
@@ -642,7 +689,7 @@ final class Gemini extends Component
 
 	/**
 	 * Helper: Get the finish reason from a generation response
-	 * 
+	 *
 	 * @param array $data Response data from generateContent
 	 * @return string|null Finish reason ('STOP', 'MAX_TOKENS', 'SAFETY', etc.), or null
 	 */
@@ -653,7 +700,7 @@ final class Gemini extends Component
 
 	/**
 	 * Helper: Get usage metadata (token counts) from a response
-	 * 
+	 *
 	 * @param array $data Response data from generateContent
 	 * @return array|null Usage metadata with promptTokenCount, candidatesTokenCount, totalTokenCount
 	 */
