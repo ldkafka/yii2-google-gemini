@@ -13,12 +13,21 @@
     "require": {
         "php": ">=8.0",
         "yiisoft/yii2": "~2.0.14",
-        "yiisoft/yii2-httpclient": "~2.0.0"
+        "yiisoft/yii2-httpclient": "~2.0.0",
+         "guzzlehttp/guzzle": "^7.10"
     },
     "autoload": {
         "psr-4": {
             "ldkafka\\gemini\\": "src/"
         }
     },
-    "minimum-stability": "stable"
+    "minimum-stability": "stable",
+    "require-dev": {
+        "yidas/yii2-composer-bower-skip": "^2.0"
+    },
+    "config": {
+        "allow-plugins": {
+            "yiisoft/yii2-composer": true
+        }
+    }
 }
